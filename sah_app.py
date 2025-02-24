@@ -42,7 +42,7 @@ with st.sidebar:
     st.header("⚙️ Prediction Parameters")
     age = st.selectbox("Age Group", AGE_GROUPS)
     sex = st.radio("Sex", ['Female', 'Male'])
-    year = st.slider("Year", 1990, 2050, 2023)  # 修改为2050年
+    year = st.slider("Year", 1990, 2050, 2023)
     population = st.number_input(
         "Population (Millions)", 
         min_value=1,
@@ -52,11 +52,9 @@ with st.sidebar:
     log_pop = np.log(population * 1_000_000)
 
 # -------------------- 模型预测 --------------------
-# 添加加载提示
 with st.spinner('Loading data and training models...'):
     models, _ = load_data()
 
-# 准备输入数据
 input_data = pd.DataFrame([[
     AGE_GROUPS.index(age),
     0 if sex == 'Female' else 1,
@@ -64,7 +62,6 @@ input_data = pd.DataFrame([[
     log_pop
 ]], columns=['age_code', 'sex_code', 'year', 'log_population'])
 
-# 执行预测
 try:
     predictions = {
         'DALYs': models['DALYs'].predict(input_data)[0],
@@ -75,48 +72,49 @@ except Exception as e:
     st.error(f"Prediction error: {str(e)}")
     st.stop()
 
-# 显示结果
-col1, col2, col3 = st.columns(3)
-col1.metric("DALYs (Disability-Adjusted Life Years)", 
-           f"{predictions['DALYs']:,.1f}",
-           help="Measure of overall disease burden")
-col2.metric("Incidence Rate", 
-           f"{predictions['Incidence']:.2f}%",
-           help="New cases per 100,000 population")
-col3.metric("Prevalence Rate", 
-           f"{predictions['Prevalence']:.2f}%",
-           help="Total cases per 100,000 population")
+# 调整列宽比例解决遮挡问题
+col1, col2, col3 = st.columns([2, 2.5, 2])  # 增加中间列的宽度
+with col1:
+    st.metric("DALYs (Disability-Adjusted Life Years)", 
+            f"{predictions['DALYs']:,.1f}",
+            help="Measure of overall disease burden")
+with col2:
+    st.metric("Incidence Rate", 
+            f"{predictions['Incidence']:.2f}%",
+            help="New cases per 100,000 population")
+with col3:
+    st.metric("Prevalence Rate", 
+            f"{predictions['Prevalence']:.2f}%",
+            help="Total cases per 100,000 population")
 
-# -------------------- SHAP模型解释 --------------------
+# -------------------- 改进的SHAP模型解释 --------------------
 st.divider()
 st.header("Model Interpretation")
 
 try:
     explainer = shap.TreeExplainer(models['DALYs'])
-    shap_values = explainer.shap_values(input_data)
+    shap_values = explainer(input_data)
     
+    # 使用summary_plot替代force_plot
     plt.switch_backend('agg')
-    fig, ax = plt.subplots()
-    
-    shap.force_plot(
-        base_value=explainer.expected_value,
-        shap_values=shap_values[0],
-        features=input_data.iloc[0],
+    fig, ax = plt.subplots(figsize=(10, 4))
+    shap.summary_plot(
+        shap_values.values, 
+        input_data,
         feature_names=['Age Group', 'Sex', 'Year', 'Log Population'],
-        matplotlib=True,
-        show=False,
-        figsize=(12, 4)
+        plot_type="bar",
+        show=False
     )
+    plt.tight_layout()
     
     st.pyplot(fig)
     
     with st.expander("How to interpret this plot?"):
         st.markdown("""
-        - **Red arrows**: Features increasing prediction  
-        - **Blue arrows**: Features decreasing prediction  
-        - **Base value**: Average model output  
-        - **Output value**: Prediction for this case  
+        - **Bar length**: Shows feature importance magnitude
+        - **Color**: Indicates impact direction (red=positive, blue=negative)
+        - Values show actual contribution to prediction
         """)
-    
+        
 except Exception as e:
     st.warning(f"SHAP visualization unavailable: {str(e)}")
