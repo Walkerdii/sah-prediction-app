@@ -6,30 +6,50 @@ import matplotlib.pyplot as plt
 from xgboost import XGBRegressor
 
 # -------------------- 配置 --------------------
-DATA_URL = "https://raw.githubusercontent.com/Walkerdii/sah-prediction-app/main/Merged_Data.xlsx"
 AGE_GROUPS = ['15-19', '20-24', '25-29', '30-34', '35-39', '40-44', '45-49']
 
 # -------------------- 数据处理 --------------------
 @st.cache_data
 def load_data():
-    """加载数据并训练模型"""
+    """加载并处理数据"""
     try:
-        df = pd.read_excel(DATA_URL, engine='openpyxl')
+        # 从URL读取数据
+        df = pd.read_excel("Merged_Data.xlsx", sheet_name="Merged_Data", engine='openpyxl')
         
-        # 特征编码验证
-        assert set(df['sex_name'].unique()) == {'female', 'male'}, "性别数据异常"
-        assert set(df['age_name']) == set(AGE_GROUPS), "年龄组数据异常"
+        # 数据清洗
+        # 1. 处理年龄组格式（去除'years'）
+        df['age_group'] = df['age_name'].str.replace(' years', '').str.strip()
         
-        df['age_code'] = df['age_name'].map({age: idx for idx, age in enumerate(AGE_GROUPS)})
-        df['sex_code'] = df['sex_name'].map({'female': 0, 'male': 1})
+        # 2. 验证年龄组
+        invalid_age = ~df['age_group'].isin(AGE_GROUPS)
+        if invalid_age.any():
+            st.error(f"发现无效年龄组: {df.loc[invalid_age, 'age_group'].unique()}")
+            st.stop()
+            
+        # 3. 处理性别（统一为小写）
+        df['sex'] = df['sex_name'].str.lower().str.strip()
+        valid_sex = df['sex'].isin(['female', 'male'])
+        if not valid_sex.all():
+            invalid_sex = df.loc[~valid_sex, 'sex'].unique()
+            st.error(f"发现无效性别: {invalid_sex}")
+            st.stop()
+        
+        # 特征编码
+        df['age_code'] = df['age_group'].map({age: idx for idx, age in enumerate(AGE_GROUPS)})
+        df['sex_code'] = df['sex'].map({'female': 0, 'male': 1})
+        
+        # 验证特征列
+        features = df[['age_code', 'sex_code', 'year', 'log_population']]
+        targets = ['DALYs', 'Incidence', 'Prevalence']
         
         # 训练模型
-        features = df[['age_code', 'sex_code', 'year', 'log_population']]
-        return {
+        models = {
             'DALYs': XGBRegressor().fit(features, df['DALYs']),
             'Incidence': XGBRegressor().fit(features, df['Incidence']),
             'Prevalence': XGBRegressor().fit(features, df['Prevalence'])
-        }, df
+        }
+        
+        return models, df
         
     except Exception as e:
         st.error(f"数据加载失败: {str(e)}")
@@ -56,9 +76,9 @@ with st.sidebar:
 
 # -------------------- 模型预测 --------------------
 with st.spinner('正在加载数据和训练模型...'):
-    models, _ = load_data()
+    models, df = load_data()
 
-# 输入数据验证
+# 构造输入数据
 input_data = pd.DataFrame([[
     AGE_GROUPS.index(age),
     0 if sex == '女性' else 1,
@@ -66,6 +86,7 @@ input_data = pd.DataFrame([[
     log_pop
 ]], columns=['age_code', 'sex_code', 'year', 'log_population'])
 
+# 执行预测
 try:
     predictions = {
         'DALYs': models['DALYs'].predict(input_data)[0],
@@ -77,31 +98,20 @@ except Exception as e:
     st.stop()
 
 # -------------------- 结果展示 --------------------
-col1, col2, col3 = st.columns([1.2, 1, 1])  # 优化列宽比例
-col1.metric("伤残调整生命年 (DALYs)", 
-           f"{predictions['DALYs']:,.1f}",
-           help="总体疾病负担的衡量指标")
-col2.metric("发病率", 
-           f"{predictions['Incidence']:.2f}%",
-           help="每10万人口新增病例数")
-col3.metric("患病率", 
-           f"{predictions['Prevalence']:.2f}%",
-           help="每10万人口现存病例数")
+col1, col2, col3 = st.columns(3)
+col1.metric("伤残调整生命年 (DALYs)", f"{predictions['DALYs']:,.1f}", help="总体疾病负担")
+col2.metric("发病率", f"{predictions['Incidence']:.2f}%", help="每10万人口新增病例")
+col3.metric("患病率", f"{predictions['Prevalence']:.2f}%", help="每10万人口现存病例")
 
 # -------------------- SHAP解释模块 --------------------
 st.divider()
 st.header("模型解释")
 
 try:
-    # 版本兼容性处理
-    plt.switch_backend('agg')
-    plt.figure(figsize=(10, 4))
-    
-    # 使用最新SHAP API
     explainer = shap.Explainer(models['DALYs'])
     shap_values = explainer(input_data)
     
-    # 可视化
+    plt.figure(figsize=(10, 4))
     shap.plots.bar(shap_values[0], show=False)
     plt.title("特征影响分析", fontsize=14)
     plt.xlabel("SHAP值 (对DALYs的影响)", fontsize=12)
@@ -112,34 +122,15 @@ try:
     df_impact = pd.DataFrame({
         '特征': ['年龄组', '性别', '年份', '人口对数'],
         'SHAP值': shap_values.values[0].tolist(),
-        '影响方向': ['风险增加' if x > 0 else '风险降低' for x in shap_values.values[0]]
+        '影响方向': ['增加风险' if x > 0 else '降低风险' for x in shap_values.values[0]]
     })
     st.dataframe(df_impact.style.format({'SHAP值': '{:.4f}'}))
     
-    # 动态解释
-    with st.expander("解读指南"):
-        st.markdown(f"""
-        ### 当前参数分析
-        - **年龄组**: {age} → 贡献值: `{shap_values.values[0][0]:.4f}`
-        - **性别**: {sex} → 贡献值: `{shap_values.values[0][1]:.4f}`
-        - **年份**: {year} → 贡献值: `{shap_values.values[0][2]:.4f}`
-        - **人口基数**: {population}百万 → 贡献值: `{shap_values.values[0][3]:.4f}`
-        
-        ### 颜色说明
-        - 🔴 正值：增加疾病风险
-        - 🔵 负值：降低疾病风险
-        """)
-        
 except Exception as e:
-    st.error(f"""
-    SHAP可视化失败: {str(e)}
-    
-    **常见解决方法**
-    1. 升级SHAP库: `pip install --upgrade shap`
-    2. 检查输入数据格式:
-       - 年龄代码: {input_data['age_code'].values}
-       - 性别代码: {input_data['sex_code'].values}
-       - 年份: {year}
-       - 人口对数: {log_pop:.2f}
-    3. 验证模型特征是否匹配
-    """)
+    st.error(f"SHAP解释失败: {str(e)}")
+
+# 调试信息
+with st.expander("数据验证信息"):
+    st.write("数据样例:", df[['age_group', 'sex', 'year', 'log_population']].head(2))
+    st.write("年龄分布:", df['age_group'].value_counts())
+    st.write("性别分布:", df['sex'].value_counts())
