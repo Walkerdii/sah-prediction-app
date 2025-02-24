@@ -92,29 +92,74 @@ st.divider()
 st.header("Model Interpretation")
 
 try:
+    # 使用DALYs模型作为示例
     explainer = shap.TreeExplainer(models['DALYs'])
-    shap_values = explainer(input_data)
     
-    # 使用summary_plot替代force_plot
-    plt.switch_backend('agg')
-    fig, ax = plt.subplots(figsize=(10, 4))
+    # 计算完整SHAP值（包含基值）
+    shap_values = explainer.shap_values(input_data)
+    
+    # 调试输出原始SHAP值
+    st.write("Raw SHAP values:", shap_values)
+    
+    # 创建可视化容器
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+    
+    # 第一子图：条形图显示绝对影响
     shap.summary_plot(
-        shap_values.values, 
+        shap_values, 
         input_data,
         feature_names=['Age Group', 'Sex', 'Year', 'Log Population'],
         plot_type="bar",
-        show=False
+        max_display=10,  # 强制显示所有特征
+        show=False,
+        color_bar=False,
+        ax=ax1
     )
-    plt.tight_layout()
+    ax1.set_title("Feature Importance (Absolute Impact)")
     
+    # 第二子图：小提琴图显示方向性影响
+    shap.summary_plot(
+        shap_values,
+        input_data,
+        feature_names=['Age Group', 'Sex', 'Year', 'Log Population'],
+        plot_type="violin",
+        show=False,
+        ax=ax2
+    )
+    ax2.set_title("Feature Impact Direction")
+    
+    plt.tight_layout()
     st.pyplot(fig)
     
-    with st.expander("How to interpret this plot?"):
-        st.markdown("""
-        - **Bar length**: Shows feature importance magnitude
-        - **Color**: Indicates impact direction (red=positive, blue=negative)
-        - Values show actual contribution to prediction
-        """)
+    # 添加数值表格展示
+    st.subheader("Detailed SHAP Values")
+    shap_table = pd.DataFrame({
+        'Feature': ['Age Group', 'Sex', 'Year', 'Log Population'],
+        'SHAP Value': shap_values[0],
+        'Impact Direction': ['Positive' if val > 0 else 'Negative' for val in shap_values[0]]
+    })
+    st.dataframe(shap_table.style.format({'SHAP Value': '{:.4f}'}))
+    
+    # 添加动态解释
+    age_impact = shap_values[0][0]
+    sex_impact = shap_values[0][1]
+    
+    with st.expander("Interpretation Guidance"):
+        st.markdown(f"""
+        ### 特征影响分析：
+        - **年龄组**贡献值：`{age_impact:.4f}`
+          - 当前选择：{age}
+          - 影响方向：{'增加风险' if age_impact > 0 else '降低风险'}
         
+        - **性别**贡献值：`{sex_impact:.4f}`
+          - 当前选择：{sex}
+          - 影响方向：{'增加风险' if sex_impact > 0 else '降低风险'}
+        
+        ### 解读原则：
+        1. 正值（红色）表示提升风险指标
+        2. 负值（蓝色）表示降低风险指标
+        3. 绝对值越大表示影响越显著
+        """)
+    
 except Exception as e:
-    st.warning(f"SHAP visualization unavailable: {str(e)}")
+    st.warning(f"SHAP visualization error: {str(e)}")
