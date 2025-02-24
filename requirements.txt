@@ -1,6 +1,6 @@
 streamlit
-xgboost
 pandas
-openpyxl
+xgboost
 shap
-matplotlib
+matplotli
+openpyxl
