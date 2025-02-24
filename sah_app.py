@@ -23,7 +23,7 @@ def load_data():
         # 2. 验证年龄组
         invalid_age = ~df['age_group'].isin(AGE_GROUPS)
         if invalid_age.any():
-            st.error(f"发现无效年龄组: {df.loc[invalid_age, 'age_group'].unique()}")
+            st.error(f"Invalid age groups detected: {df.loc[invalid_age, 'age_group'].unique()}")
             st.stop()
             
         # 3. 处理性别（统一为小写）
@@ -31,7 +31,7 @@ def load_data():
         valid_sex = df['sex'].isin(['female', 'male'])
         if not valid_sex.all():
             invalid_sex = df.loc[~valid_sex, 'sex'].unique()
-            st.error(f"发现无效性别: {invalid_sex}")
+            st.error(f"Invalid gender values: {invalid_sex}")
             st.stop()
         
         # 特征编码
@@ -40,7 +40,6 @@ def load_data():
         
         # 验证特征列
         features = df[['age_code', 'sex_code', 'year', 'log_population']]
-        targets = ['DALYs', 'Incidence', 'Prevalence']
         
         # 训练模型
         models = {
@@ -52,36 +51,36 @@ def load_data():
         return models, df
         
     except Exception as e:
-        st.error(f"数据加载失败: {str(e)}")
+        st.error(f"Data loading failed: {str(e)}")
         st.stop()
 
 # -------------------- 界面 --------------------
-st.set_page_config(page_title="SAH预测系统", layout="wide")
-st.title("蛛网膜下腔出血风险预测")
-st.caption("数据来源: GBD数据库 | 开发者: Walkerdii")
+st.set_page_config(page_title="SAH Prediction System", layout="wide")
+st.title("Subarachnoid Hemorrhage Risk Prediction")
+st.caption("Data Source: GBD Database | Developer: Walkerdii")
 
 # 侧边栏输入
 with st.sidebar:
-    st.header("⚙️ 预测参数")
-    age = st.selectbox("年龄组", AGE_GROUPS)
-    sex = st.radio("性别", ['女性', '男性'])
-    year = st.slider("年份", 1990, 2050, 2023)
+    st.header("⚙️ Prediction Parameters")
+    age = st.selectbox("Age Group", AGE_GROUPS)
+    sex = st.radio("Gender", ['Female', 'Male'])
+    year = st.slider("Year", 1990, 2050, 2023)
     population = st.number_input(
-        "人口数量 (百万)", 
+        "Population (Millions)", 
         min_value=1,
         value=10,
-        help="实际人口 = 输入值 × 1,000,000"
+        help="Actual population = Input value × 1,000,000"
     )
     log_pop = np.log(population * 1_000_000)
 
 # -------------------- 模型预测 --------------------
-with st.spinner('正在加载数据和训练模型...'):
+with st.spinner('Loading data and training models...'):
     models, df = load_data()
 
 # 构造输入数据
 input_data = pd.DataFrame([[
     AGE_GROUPS.index(age),
-    0 if sex == '女性' else 1,
+    0 if sex == 'Female' else 1,
     year,
     log_pop
 ]], columns=['age_code', 'sex_code', 'year', 'log_population'])
@@ -94,18 +93,24 @@ try:
         'Prevalence': models['Prevalence'].predict(input_data)[0]
     }
 except Exception as e:
-    st.error(f"预测错误: {str(e)}")
+    st.error(f"Prediction error: {str(e)}")
     st.stop()
 
 # -------------------- 结果展示 --------------------
 col1, col2, col3 = st.columns(3)
-col1.metric("伤残调整生命年 (DALYs)", f"{predictions['DALYs']:,.1f}", help="总体疾病负担")
-col2.metric("发病率", f"{predictions['Incidence']:.2f}%", help="每10万人口新增病例")
-col3.metric("患病率", f"{predictions['Prevalence']:.2f}%", help="每10万人口现存病例")
+col1.metric("Disability-Adjusted Life Years (DALYs)", 
+          f"{predictions['DALYs']:,.1f}",
+          help="Measure of overall disease burden")
+col2.metric("Incidence Rate", 
+          f"{predictions['Incidence']:.2f}%",
+          help="New cases per 100,000 population")
+col3.metric("Prevalence Rate", 
+          f"{predictions['Prevalence']:.2f}%",
+          help="Existing cases per 100,000 population")
 
 # -------------------- SHAP解释模块 --------------------
 st.divider()
-st.header("模型解释")
+st.header("Model Interpretation")
 
 try:
     explainer = shap.Explainer(models['DALYs'])
@@ -113,24 +118,24 @@ try:
     
     plt.figure(figsize=(10, 4))
     shap.plots.bar(shap_values[0], show=False)
-    plt.title("特征影响分析", fontsize=14)
-    plt.xlabel("SHAP值 (对DALYs的影响)", fontsize=12)
+    plt.title("Feature Impact Analysis", fontsize=14)
+    plt.xlabel("SHAP Value (Impact on DALYs)", fontsize=12)
     st.pyplot(plt.gcf())
     
     # 数值表格
-    st.subheader("详细影响值")
+    st.subheader("Detailed Impact Values")
     df_impact = pd.DataFrame({
-        '特征': ['年龄组', '性别', '年份', '人口对数'],
-        'SHAP值': shap_values.values[0].tolist(),
-        '影响方向': ['增加风险' if x > 0 else '降低风险' for x in shap_values.values[0]]
+        'Feature': ['Age Group', 'Gender', 'Year', 'Log Population'],
+        'SHAP Value': shap_values.values[0].tolist(),
+        'Impact Direction': ['Risk Increase' if x > 0 else 'Risk Decrease' for x in shap_values.values[0]]
     })
-    st.dataframe(df_impact.style.format({'SHAP值': '{:.4f}'}))
+    st.dataframe(df_impact.style.format({'SHAP Value': '{:.4f}'}))
     
 except Exception as e:
-    st.error(f"SHAP解释失败: {str(e)}")
+    st.error(f"SHAP interpretation failed: {str(e)}")
 
 # 调试信息
-with st.expander("数据验证信息"):
-    st.write("数据样例:", df[['age_group', 'sex', 'year', 'log_population']].head(2))
-    st.write("年龄分布:", df['age_group'].value_counts())
-    st.write("性别分布:", df['sex'].value_counts())
+with st.expander("Data Validation Info"):
+    st.write("Data Sample:", df[['age_group', 'sex', 'year', 'log_population']].head(2))
+    st.write("Age Distribution:", df['age_group'].value_counts())
+    st.write("Gender Distribution:", df['sex'].value_counts())
