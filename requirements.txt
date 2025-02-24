@@ -1,6 +1,7 @@
-streamlit
-pandas
-xgboost
-shap
-matplotli
-openpyxl
+streamlit==1.42.2
+pandas==2.2.3
+xgboost==2.1.4
+shap==0.46.0
+matplotlib==3.8.2  # 修正拼写错误
+openpyxl==3.1.2
+protobuf<4.0.0  # 解决与 Streamlit 的兼容性问题
