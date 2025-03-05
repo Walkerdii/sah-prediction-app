@@ -105,7 +105,7 @@ col3.metric("Prevalence Rate", f"{predictions['Prevalence']:.2f}%", help="Existi
 
 # -------------------- SHAP解释模块 --------------------
 st.divider()
-st.header("Model Interpretation")
+st.header("🧠 Model Interpretation")
 
 try:
     explainer = shap.Explainer(models['DALYs'])
@@ -130,7 +130,7 @@ except Exception as e:
     st.error(f"SHAP interpretation failed: {str(e)}")
 
 # -------------------- 调试信息 --------------------
-with st.expander("Data Validation Info"):
+with st.expander("🔍 Data Validation Info"):
     st.write("Data Sample:", df[['age_group', 'sex', 'year', 'log_population']].head(2))
     st.write("Age Distribution:", df['age_group'].value_counts())
     st.write("Gender Distribution:", df['sex'].value_counts())
