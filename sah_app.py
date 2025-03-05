@@ -1,253 +1,215 @@
-# core.py
-import os
-import numpy as np
+import streamlit as st
 import pandas as pd
+import numpy as np
 import shap
 import matplotlib.pyplot as plt
-import plotly.express as px
-import streamlit as st
+import os
 from xgboost import XGBRegressor
-from sklearnex import patch_sklearn
 from datetime import datetime
 
-# ==================== 初始化加速 ====================
-patch_sklearn()
-
-# ==================== 全局配置 ====================
-MODEL_PATH = "sah_models/"
+# -------------------- 全局配置 --------------------
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "sah_models")  # 使用绝对路径
 AGE_GROUPS = ['15-19', '20-24', '25-29', '30-34', '35-39', '40-44', '45-49']
-os.makedirs(MODEL_PATH, exist_ok=True)
+os.makedirs(MODEL_PATH, exist_ok=True)  # 自动创建模型目录
 
-# ==================== 模型管理 ====================
+# -------------------- 模型加载 --------------------
 @st.cache_resource
 def load_models():
     """加载预训练模型"""
     try:
+        # 验证模型文件存在性
+        required_models = ['DALYs.json', 'Incidence.json', 'Prevalence.json']
+        missing = [m for m in required_models if not os.path.exists(os.path.join(MODEL_PATH, m))]
+        
+        if missing:
+            st.error(f"缺少模型文件: {missing}\n请先执行 model_trainer.py 进行训练")
+            st.stop()
+
         return {
-            'DALYs': XGBRegressor().load_model(f"{MODEL_PATH}DALYs.json"),
-            'Incidence': XGBRegressor().load_model(f"{MODEL_PATH}Incidence.json"),
-            'Prevalence': XGBRegressor().load_model(f"{MODEL_PATH}Prevalence.json")
+            'DALYs': XGBRegressor().load_model(os.path.join(MODEL_PATH, 'DALYs.json')),
+            'Incidence': XGBRegressor().load_model(os.path.join(MODEL_PATH, 'Incidence.json')),
+            'Prevalence': XGBRegressor().load_model(os.path.join(MODEL_PATH, 'Prevalence.json'))
         }
     except Exception as e:
         st.error(f"模型加载失败: {str(e)}")
         st.stop()
 
-# ==================== 数据处理 ====================
-@st.cache_data(ttl=3600, show_spinner=False)
+# -------------------- 数据处理 --------------------
+@st.cache_data
 def load_dataset():
     """加载并验证数据集"""
     try:
-        df = pd.read_excel("Merged_Data.xlsx", sheet_name="Merged_Data", engine='openpyxl')
-        
-        # 数据清洗
-        df['age_group'] = df['age_name'].str.replace(' years', '').str.strip()
-        df['sex'] = df['sex_name'].str.lower().str.strip()
+        df = pd.read_excel("Merged_Data.xlsx", 
+                          sheet_name="Merged_Data", 
+                          engine='openpyxl',
+                          dtype={'year': int})
         
         # 数据验证
-        if not df['age_group'].isin(AGE_GROUPS).all():
-            invalid_age = df.loc[~df['age_group'].isin(AGE_GROUPS), 'age_group'].unique()
+        age_validation = df['age_name'].str.replace(' years', '').isin(AGE_GROUPS)
+        if not age_validation.all():
+            invalid_age = df.loc[~age_validation, 'age_name'].unique()
             st.error(f"无效年龄组: {invalid_age}")
             st.stop()
             
-        if not df['sex'].isin(['female', 'male']).all():
-            invalid_sex = df.loc[~df['sex'].isin(['female', 'male']), 'sex'].unique()
-            st.error(f"无效性别: {invalid_sex}")
+        gender_validation = df['sex_name'].str.lower().isin(['female', 'male'])
+        if not gender_validation.all():
+            invalid_gender = df.loc[~gender_validation, 'sex_name'].unique()
+            st.error(f"无效性别: {invalid_gender}")
             st.stop()
             
-        return df[['age_group', 'sex', 'year', 'log_population']]
+        # 特征编码（必须与训练时一致）
+        df['age_code'] = df['age_name'].str.replace(' years', '').map(
+            {age: idx for idx, age in enumerate(AGE_GROUPS)}
+        )
+        df['sex_code'] = df['sex_name'].str.lower().map({'female': 0, 'male': 1})
+        
+        return df[['age_code', 'sex_code', 'year', 'log_population']]
     
+    except FileNotFoundError:
+        st.error("找不到数据文件 Merged_Data.xlsx")
+        st.stop()
     except Exception as e:
         st.error(f"数据加载失败: {str(e)}")
         st.stop()
 
-# ==================== 界面配置 ====================
+# -------------------- 主界面 --------------------
 st.set_page_config(
-    page_title="SAH Predictor",
-    page_icon="🩺",
+    page_title="SAH Prediction System", 
     layout="wide",
-    initial_sidebar_state="expanded"
+    page_icon="🧠"
 )
 
-# ==================== 主界面 ====================
-def main():
-    # 标题部分
-    st.title("SAH Predictor: Interactive Burden Forecasting with Explainable AI")
-    st.markdown("""
-    **An XGBoost-based prediction system for subarachnoid hemorrhage outcomes with SHAP interpretation (1990-2050)**  
-    *Data Source: GBD Database | Developer: Walkerdii*
-    """)
-    
-    # 侧边栏输入
-    with st.sidebar:
-        st.header("⚙️ 预测参数")
-        
-        # 年龄组选择
-        age = st.selectbox(
-            "年龄组",
-            AGE_GROUPS,
-            index=3,
-            help="选择15-49岁之间的年龄分组"
-        )
-        
-        # 性别选择
-        sex = st.radio(
-            "性别",
-            ['Female', 'Male'],
-            index=0,
-            horizontal=True
-        )
-        
-        # 年份选择
-        current_year = datetime.now().year
-        year = st.slider(
-            "年份",
-            min_value=1990,
-            max_value=2050,
-            value=current_year,
-            step=1,
-            help=f"有效范围: 1990-2050 (当前系统年份: {current_year})"
-        )
-        
-        # 人口输入
-        population = st.number_input(
-            "人口数量 (百万)",
-            min_value=0.1,
-            max_value=1000.0,
-            value=10.0,
-            step=0.1,
-            format="%.1f",
-            help="实际人口 = 输入值 × 1,000,000"
-        )
-        log_pop = np.log(population * 1_000_000)
-    
-    # ==================== 模型加载 ====================
-    with st.spinner('正在加载预测模型...'):
-        models = load_models()
-        df = load_dataset()
-    
-    # ==================== 生成预测 ====================
-    input_data = pd.DataFrame([[
-        AGE_GROUPS.index(age),
-        0 if sex == 'Female' else 1,
-        year,
-        log_pop
-    ]], columns=['age_code', 'sex_code', 'year', 'log_population'])
-    
-    try:
-        predictions = {
-            'DALYs': models['DALYs'].predict(input_data)[0],
-            'Incidence': models['Incidence'].predict(input_data)[0],
-            'Prevalence': models['Prevalence'].predict(input_data)[0]
-        }
-    except Exception as e:
-        st.error(f"预测失败: {str(e)}")
-        st.stop()
-    
-    # ==================== 结果展示 ====================
-    col1, col2, col3 = st.columns(3)
-    col1.metric("伤残调整生命年 (DALYs)", 
-              f"{predictions['DALYs']:,.1f}",
-              help="疾病总负担的测量指标")
-    col2.metric("发病率", 
-              f"{predictions['Incidence']:.2f}%",
-              delta_color="inverse",
-              help="每10万人口新发病例数")
-    col3.metric("患病率", 
-              f"{predictions['Prevalence']:.2f}%",
-              delta_color="inverse",
-              help="每10万人口现存病例数")
-    
-    # ==================== 趋势可视化 ====================
-    st.divider()
-    st.header("📈 趋势预测")
-    
-    # 生成时间序列预测
-    years_range = range(max(1990, year-10), min(2050, year+10)+1)
-    plot_data = []
-    
-    for y in years_range:
-        temp_data = input_data.copy()
-        temp_data['year'] = y
-        plot_data.append({
-            'Year': y,
-            'DALYs': models['DALYs'].predict(temp_data)[0],
-            'Incidence': models['Incidence'].predict(temp_data)[0],
-            'Prevalence': models['Prevalence'].predict(temp_data)[0]
-        })
-    
-    df_plot = pd.DataFrame(plot_data)
-    
-    # 交互式图表
-    selected_outcomes = st.multiselect(
-        "选择展示指标",
-        ['DALYs', 'Incidence', 'Prevalence'],
-        default=['DALYs'],
-        key="outcome_selector"
-    )
-    
-    fig = px.line(
-        df_plot, 
-        x='Year', 
-        y=selected_outcomes,
-        title="10年趋势预测",
-        markers=True,
-        labels={'value': '指标值', 'variable': '指标'},
-        height=400
-    )
-    fig.update_layout(hovermode="x unified")
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # ==================== SHAP解释 ====================
-    st.divider()
-    st.header("🧠 模型解释")
-    
-    # 选择分析目标
-    analysis_target = st.selectbox(
-        "选择分析指标",
-        ['DALYs', 'Incidence', 'Prevalence'],
-        index=0,
-        key="shap_target"
-    )
-    
-    try:
-        explainer = shap.Explainer(models[analysis_target])
-        shap_values = explainer(input_data)
-        
-        # 瀑布图
-        st.subheader("特征影响分析")
-        fig, ax = plt.subplots(figsize=(10,4))
-        shap.plots.waterfall(shap_values[0], max_display=7, show=False)
-        plt.title(f"{analysis_target} - SHAP值解释", fontsize=14)
-        st.pyplot(fig)
-        
-        # 特征依赖图
-        st.subheader("特征关系探索")
-        selected_feature = st.selectbox(
-            "选择特征",
-            input_data.columns,
-            index=0,
-            key="feature_selector"
-        )
-        
-        fig, ax = plt.subplots(figsize=(8,5))
-        shap.dependence_plot(
-            selected_feature,
-            shap_values.values,
-            input_data,
-            interaction_index=None,
-            ax=ax
-        )
-        plt.title(f"{selected_feature} 依赖关系", fontsize=12)
-        st.pyplot(fig)
-        
-    except Exception as e:
-        st.error(f"模型解释失败: {str(e)}")
-    
-    # ==================== 调试信息 ====================
-    with st.expander("🔍 数据验证信息"):
-        st.write("### 数据样本", df.head(2))
-        st.write("### 年龄分布", df['age_group'].value_counts())
-        st.write("### 性别分布", df['sex'].value_counts())
+st.title("Subarachnoid Hemorrhage Risk Prediction")
+st.markdown("""
+**An XGBoost-based prediction system with SHAP interpretation (1990-2050)**  
+*Data Source: GBD Database | Developer: Walkerdii*
+""")
 
-if __name__ == "__main__":
-    main()
+# -------------------- 侧边栏输入 --------------------
+with st.sidebar:
+    st.header("⚙️ Prediction Parameters")
+    
+    # 年龄组选择
+    age = st.selectbox(
+        "Age Group", 
+        AGE_GROUPS,
+        index=3,
+        help="Select age group between 15-49"
+    )
+    
+    # 性别选择
+    sex = st.radio(
+        "Gender", 
+        ['Female', 'Male'],
+        index=0,
+        horizontal=True
+    )
+    
+    # 年份选择（带动态范围限制）
+    current_year = datetime.now().year
+    year = st.slider(
+        "Year", 
+        min_value=1990,
+        max_value=2050,
+        value=current_year,
+        help=f"Valid range: 1990-2050 (Current year: {current_year})"
+    )
+    
+    # 人口输入（带边界检查）
+    population = st.number_input(
+        "Population (Millions)",
+        min_value=0.1,
+        max_value=5000.0,
+        value=10.0,
+        step=0.1,
+        format="%.1f",
+        help="Actual population = Input × 1,000,000"
+    )
+    log_pop = np.log(population * 1_000_000)
+
+# -------------------- 模型加载 --------------------
+models = load_models()
+df = load_dataset()
+
+# -------------------- 预测执行 --------------------
+input_data = pd.DataFrame([[
+    AGE_GROUPS.index(age),
+    0 if sex == 'Female' else 1,
+    year,
+    log_pop
+]], columns=['age_code', 'sex_code', 'year', 'log_population'])
+
+try:
+    predictions = {
+        'DALYs': models['DALYs'].predict(input_data)[0],
+        'Incidence': models['Incidence'].predict(input_data)[0],
+        'Prevalence': models['Prevalence'].predict(input_data)[0]
+    }
+except Exception as e:
+    st.error(f"预测执行失败: {str(e)}")
+    st.stop()
+
+# -------------------- 结果展示 --------------------
+col1, col2, col3 = st.columns(3)
+metric_config = {
+    'DALYs': ("Disability-Adjusted Life Years", "Overall disease burden measure"),
+    'Incidence': ("Incidence Rate", "New cases per 100k population"),
+    'Prevalence': ("Prevalence Rate", "Existing cases per 100k population")
+}
+
+for col, (key, (title, help_text)) in zip([col1, col2, col3], metric_config.items()):
+    col.metric(
+        title,
+        f"{predictions[key]:,.2f}",
+        help=help_text
+    )
+
+# -------------------- SHAP解释增强版 --------------------
+st.divider()
+st.header("🔍 Model Interpretation")
+
+# 选择分析目标
+analysis_target = st.selectbox(
+    "Select Analysis Target",
+    ['DALYs', 'Incidence', 'Prevalence'],
+    index=0
+)
+
+try:
+    explainer = shap.Explainer(models[analysis_target])
+    shap_values = explainer(input_data)
+    
+    # 瀑布图
+    st.subheader("Feature Impact Analysis")
+    fig, ax = plt.subplots(figsize=(10, 4))
+    shap.plots.waterfall(shap_values[0], max_display=7, show=False)
+    plt.title(f"{analysis_target} - SHAP Value Explanation", fontsize=14)
+    st.pyplot(fig)
+    
+    # 特征依赖图
+    st.subheader("Feature Relationship Exploration")
+    selected_feature = st.selectbox(
+        "Select Feature",
+        input_data.columns,
+        index=0
+    )
+    
+    fig, ax = plt.subplots(figsize=(8, 5))
+    shap.dependence_plot(
+        selected_feature,
+        shap_values.values,
+        input_data,
+        interaction_index=None,
+        ax=ax
+    )
+    plt.title(f"{selected_feature} Dependency", fontsize=12)
+    st.pyplot(fig)
+
+except Exception as e:
+    st.error(f"模型解释失败: {str(e)}")
+
+# -------------------- 数据验证 --------------------
+with st.expander("📊 Data Validation"):
+    st.write("### 数据样本", df.head(2))
+    st.write("### 年龄分布", df['age_code'].value_counts().sort_index())
+    st.write("### 性别分布", df['sex_code'].map({0: 'Female', 1: 'Male'}).value_counts())
