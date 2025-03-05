@@ -113,8 +113,8 @@ try:
     
     plt.figure(figsize=(10, 4))
     shap.plots.bar(shap_values[0], show=False)
-    plt.title("Feature Impact Analysis", fontsize=14)
-    plt.xlabel("SHAP Value (Impact on DALYs)", fontsize=12)
+    plt.title("Feature Impact Analysis", fontsize=10)
+    plt.xlabel("SHAP Value (Impact on DALYs)", fontsize=8)
     st.pyplot(plt.gcf())
     
     # 数值表格展示详细的SHAP影响值
